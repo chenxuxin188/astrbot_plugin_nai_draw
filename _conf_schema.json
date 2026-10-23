@@ -1,0 +1,235 @@
+{
+  "admin_ids": {
+    "description": "管理员 ID 列表（QQ 号）",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "列表中的用户可以使用 /nai account 查询 NovelAI 余额、/nai audit 查看绘图记录。"
+  },
+  "novelai": {
+    "description": "NovelAI 设置",
+    "type": "object",
+    "items": {
+      "token": {
+        "description": "NovelAI Persistent API Token",
+        "type": "string",
+        "default": "",
+        "secret": true,
+        "hint": "在 NovelAI 网页 Account Settings → Get Persistent API Token 获取，以 pst- 开头。"
+      },
+      "model": {
+        "description": "绘图模型",
+        "type": "string",
+        "default": "nai-diffusion-4-5-full",
+        "options": [
+          "nai-diffusion-4-5-full",
+          "nai-diffusion-4-5-curated",
+          "nai-diffusion-4-full",
+          "nai-diffusion-4-curated-preview",
+          "nai-diffusion-3",
+          "nai-diffusion-furry-3",
+          "nai-diffusion-5-full",
+          "nai-diffusion-5-curated"
+        ],
+        "labels": [
+          "NAI Diffusion V4.5 Full（推荐）",
+          "NAI Diffusion V4.5 Curated",
+          "NAI Diffusion V4 Full",
+          "NAI Diffusion V4 Curated",
+          "NAI Diffusion Anime V3",
+          "NAI Diffusion Furry V3",
+          "NAI Diffusion V5 Full（消耗 Opus 用量条）",
+          "NAI Diffusion V5 Curated（消耗 Opus 用量条）"
+        ],
+        "hint": "Opus 会员使用 V4.5 及以下模型、单张、总像素 ≤ 1024×1024、步数 ≤ 28 时不消耗 Anlas。V5 会消耗 Opus 用量条，用尽后扣 Anlas。"
+      },
+      "default_orientation": {
+        "description": "默认画面方向",
+        "type": "string",
+        "default": "portrait",
+        "options": [
+          "portrait",
+          "landscape",
+          "square"
+        ],
+        "labels": [
+          "竖图",
+          "横图",
+          "方图"
+        ],
+        "hint": "用户和 LLM 都没有指定方向时使用。"
+      },
+      "portrait_size": {
+        "description": "竖图尺寸",
+        "type": "string",
+        "default": "832x1216"
+      },
+      "landscape_size": {
+        "description": "横图尺寸",
+        "type": "string",
+        "default": "1216x832"
+      },
+      "square_size": {
+        "description": "方图尺寸",
+        "type": "string",
+        "default": "1024x1024"
+      },
+      "steps": {
+        "description": "采样步数",
+        "type": "int",
+        "default": 28,
+        "slider": {
+          "min": 1,
+          "max": 50,
+          "step": 1
+        },
+        "hint": "≤ 28 步时 Opus 免费。"
+      },
+      "scale": {
+        "description": "提示词相关性（CFG Scale）",
+        "type": "float",
+        "default": 5.0
+      },
+      "cfg_rescale": {
+        "description": "CFG Rescale",
+        "type": "float",
+        "default": 0.0
+      },
+      "sampler": {
+        "description": "采样器",
+        "type": "string",
+        "default": "k_euler_ancestral",
+        "options": [
+          "k_euler_ancestral",
+          "k_euler",
+          "k_dpmpp_2s_ancestral",
+          "k_dpmpp_2m_sde",
+          "k_dpmpp_2m",
+          "k_dpmpp_sde"
+        ]
+      },
+      "noise_schedule": {
+        "description": "噪声调度",
+        "type": "string",
+        "default": "karras",
+        "options": [
+          "karras",
+          "exponential",
+          "polyexponential",
+          "native"
+        ],
+        "hint": "native 仅适用于 V3 及更早的模型。"
+      },
+      "opus_free_guard": {
+        "description": "强制使用免费参数",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后自动把尺寸缩小到总像素 ≤ 1024×1024、步数限制在 28 以内。Opus 会员使用 V4.5 及以下模型时不消耗 Anlas；V5 模型不受此开关保护，仍会消耗 Opus 用量条，用尽后扣 Anlas。"
+      },
+      "base_url": {
+        "description": "接口地址",
+        "type": "string",
+        "default": "https://image.novelai.net",
+        "hint": "一般无需修改。"
+      },
+      "proxy_url": {
+        "description": "代理地址",
+        "type": "string",
+        "default": "",
+        "hint": "可选，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890。国内服务器通常需要配置。"
+      },
+      "timeout": {
+        "description": "生成超时（秒）",
+        "type": "int",
+        "default": 120
+      }
+    }
+  },
+  "prompt": {
+    "description": "提示词设置",
+    "type": "object",
+    "items": {
+      "provider_id": {
+        "description": "生成提示词使用的 LLM",
+        "type": "string",
+        "default": "",
+        "_special": "select_provider",
+        "hint": "把聊天中的绘图需求转换成 NovelAI 标签。留空则使用当前会话正在使用的模型。"
+      },
+      "required_positive": {
+        "description": "必定包含的正面提示词",
+        "type": "text",
+        "default": "location, very aesthetic, masterpiece, no text",
+        "hint": "始终追加在正面提示词末尾（质量词）。默认值为 V4.5 Full 官方质量词；更换模型时请按官方文档调整，例如 V5 为 very aesthetic, masterpiece, no text。"
+      },
+      "required_negative": {
+        "description": "必定包含的负面提示词",
+        "type": "text",
+        "default": "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page",
+        "hint": "始终放在负面提示词最前面。"
+      },
+      "sfw_only": {
+        "description": "仅生成全年龄内容",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后会要求 LLM 把露骨的请求改写成全年龄版本。"
+      },
+      "extra_instruction": {
+        "description": "给提示词 LLM 的额外要求",
+        "type": "text",
+        "default": "",
+        "hint": "可选，例如：默认使用水彩画风。"
+      }
+    }
+  },
+  "persona": {
+    "description": "人格台词设置",
+    "type": "object",
+    "items": {
+      "provider_id": {
+        "description": "生成人格台词使用的 LLM",
+        "type": "string",
+        "default": "",
+        "_special": "select_provider",
+        "hint": "用于生成开画提示、作品评价和失败时的台词。留空则使用当前会话正在使用的模型。"
+      },
+      "persona_id": {
+        "description": "指定人格",
+        "type": "string",
+        "default": "",
+        "_special": "select_persona",
+        "hint": "留空则跟随当前会话的人格。"
+      },
+      "max_length": {
+        "description": "台词目标长度（字）",
+        "type": "int",
+        "default": 40,
+        "hint": "会要求 LLM 不超过该字数；为避免句子被截断，超过该值 2 倍时才会强制截断。取值范围 10-200。"
+      }
+    }
+  },
+  "audit": {
+    "description": "绘图记录",
+    "type": "object",
+    "items": {
+      "track_anlas": {
+        "description": "记录 Anlas 消耗",
+        "type": "bool",
+        "default": true,
+        "hint": "每次生成前后各查询一次余额并记录差值。"
+      },
+      "page_size": {
+        "description": "/nai audit 每页条数",
+        "type": "int",
+        "default": 10
+      },
+      "max_records": {
+        "description": "最多保留记录条数",
+        "type": "int",
+        "default": 2000
+      }
+    }
+  }
+}
