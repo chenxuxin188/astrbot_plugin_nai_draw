@@ -50,7 +50,6 @@ https://github.com/chenxuxin188/astrbot_plugin_nai_draw
 ### 普通用户
 
 - 直接和 Bot 说想画什么，例如「帮我画一张初音未来在海边的横图」。群聊里需要按 AstrBot 的唤醒规则 @Bot 或使用唤醒前缀。
-- 也可以用指令直接画：`/nai draw <描述>`
 
 ### 管理员
 

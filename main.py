@@ -9,7 +9,6 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Image
 from astrbot.api.star import Context, Star, StarTools
-from astrbot.core.star.filter.command import GreedyStr
 
 from .audit import AuditLog, format_record
 from .nai_client import (
@@ -131,7 +130,7 @@ class NaiSettings:
 
 
 class NaiDrawPlugin(Star):
-    """NovelAI 绘图：直接让 Bot 画画，或使用 /nai draw <描述>；管理员可用 /nai account、/nai audit [页码]"""
+    """NovelAI 绘图：直接让 Bot 画画；管理员可用 /nai account、/nai audit [页码]"""
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -210,19 +209,6 @@ class NaiDrawPlugin(Star):
     def nai(self):
         """NovelAI 绘图"""
 
-    @nai.command("draw")
-    async def nai_draw_cmd(self, event: AstrMessageEvent, text: GreedyStr):
-        """画图：/nai draw <描述>"""
-        greedy = str(text or "").strip()
-        # _command_tail 能保留换行，但只认默认指令名；指令被重命名或加别名时使用 GreedyStr 的结果
-        tail = self._command_tail(event, "draw")
-        description = tail if tail and " ".join(tail.split()) == " ".join(greedy.split()) else greedy
-        task = self._spawn(self._draw_flow(event, description, "", "command"))
-        if task is not None:
-            # 交给 terminate() 统一管理；asyncio.wait 不会把取消异常抛进流水线
-            await asyncio.wait({task})
-        event.stop_event()
-
     @nai.command("account")
     async def nai_account(self, event: AstrMessageEvent):
         """查询 NovelAI 账户与 Anlas 余额（管理员）"""
@@ -259,13 +245,6 @@ class NaiDrawPlugin(Star):
         if page < pages:
             lines.append(f"查看下一页：/nai audit {page + 1}")
         yield event.plain_result("\n".join(lines)).use_t2i(False)
-
-    @staticmethod
-    def _command_tail(event: AstrMessageEvent, sub: str) -> str:
-        """取出 "nai <sub>" 之后的原始文本（保留换行）。"""
-        msg = (event.message_str or "").strip()
-        match = re.match(rf"^[/／]?\s*nai\s+{sub}(?:\s+(.*))?$", msg, re.S | re.I)
-        return (match.group(1) or "").strip() if match else ""
 
     # ------------------------------------------------------------------ 绘图流程
 
