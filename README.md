@@ -34,11 +34,12 @@ https://github.com/chenxuxin188/astrbot_plugin_nai_draw
 | --- | --- |
 | 管理员 ID 列表 | 可以使用管理员指令的 QQ 号 |
 | NovelAI Token | 在 NovelAI 网页 *Account Settings → Get Persistent API Token* 获取，以 `pst-` 开头 |
+| API 地址 | 默认官方地址 `https://image.novelai.net`。使用反向代理或中转服务时改成对应地址，生成图片和查询余额都走这个地址 |
+| 代理地址 | 支持 http / https / socks5，例如 `http://127.0.0.1:7890`。留空则使用 AstrBot 系统设置里的全局代理（若有）。国内服务器通常需要配置 |
 | 绘图模型 | 默认 V4.5 Full。V5 会消耗 Opus 用量条，用尽后扣 Anlas |
 | 默认画面方向 / 各方向尺寸 | 默认竖图 832×1216、横图 1216×832、方图 1024×1024 |
 | 步数、CFG Scale、CFG Rescale、采样器、噪声调度 | NovelAI 生成参数，默认值与官网 V4.5 一致 |
 | 强制使用免费参数 | 开启时把总像素限制在 1024×1024 以内、步数限制在 28 以内（V5 模型不受保护） |
-| 代理地址 | 国内服务器通常需要，支持 http / socks5 |
 | 生成提示词使用的 LLM | 留空则使用当前会话的模型 |
 | 必定包含的正面 / 负面提示词 | 正面词追加在末尾（默认是 V4.5 Full 官方质量词），负面词放在最前面 |
 | 仅生成全年龄内容 | 默认开启，要求 LLM 把露骨的需求改写为全年龄版本 |
@@ -55,7 +56,7 @@ https://github.com/chenxuxin188/astrbot_plugin_nai_draw
 
 | 指令 | 作用 |
 | --- | --- |
-| `/nai account` | 查询订阅等级、到期时间、Anlas 余额（订阅 + 购买），以及当前参数是否免费 |
+| `/nai account` | 查询当前 API 地址和代理、订阅等级、到期时间、Anlas 余额（订阅 + 购买），以及当前参数是否免费 |
 | `/nai audit [页码]` | 从新到旧查看绘图记录：时间、用户、群号、模型、尺寸、步数、种子、耗时、Anlas 消耗、需求和 Prompt、失败原因 |
 
 记录保存在 `data/plugin_data/astrbot_plugin_nai_draw/audit.jsonl`。
@@ -73,6 +74,10 @@ https://github.com/chenxuxin188/astrbot_plugin_nai_draw
 - **重载插件**：保存插件配置会触发重载。正在进行的绘图会被中断，Bot 会提示用户稍后重试。
 - **WebUI 对话**：在 WebUI 自带的聊天页面中，Bot 会等绘图完成后再结束本轮回复。
 - **指令冲突**：本插件使用 `/nai` 指令组。请不要与同样注册了 `nai` 指令的插件（例如 ppnai）同时启用。
+
+## 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 开发
 

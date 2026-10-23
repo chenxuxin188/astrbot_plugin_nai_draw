@@ -220,6 +220,76 @@ def test_client_refuses_after_close():
         run(go())
 
 
+def test_normalize_urls():
+    assert nai_client.normalize_base_url("") == nai_client.DEFAULT_BASE_URL
+    assert nai_client.normalize_base_url(" image.novelai.net/ ") == "https://image.novelai.net"
+    assert nai_client.normalize_base_url("http://relay.example.com/nai/") == "http://relay.example.com/nai"
+    assert nai_client.normalize_proxy_url("  ") == ""
+    assert nai_client.normalize_proxy_url("127.0.0.1:7890") == "http://127.0.0.1:7890"
+    assert nai_client.normalize_proxy_url("socks5://127.0.0.1:7890") == "socks5://127.0.0.1:7890"
+    assert nai_client.mask_url_credentials("http://user:pw@1.2.3.4:8080") == "http://***@1.2.3.4:8080"
+    assert nai_client.mask_url_credentials("http://1.2.3.4:8080") == "http://1.2.3.4:8080"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [("image.novelai.net", "https://image.novelai.net/ai/generate-image"),
+     ("https://relay.example.com/nai/", "https://relay.example.com/nai/ai/generate-image")],
+)
+def test_client_uses_configured_base_url(base_url, expected):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, content=make_zip())
+
+    async def go():
+        client = NovelAIClient(transport=httpx.MockTransport(handler))
+        try:
+            return await client.generate(make_request(), token="t", base_url=base_url)
+        finally:
+            await client.close()
+
+    assert run(go()) == PNG and seen == [expected]
+
+
+def test_client_invalid_proxy_reports_error():
+    async def go():
+        client = NovelAIClient()
+        try:
+            await client.generate(make_request(), token="t", proxy="ftp://127.0.0.1:21")
+        finally:
+            await client.close()
+
+    with pytest.raises(NovelAIError) as info:
+        run(go())
+    assert "代理地址无效" in str(info.value) and not info.value.retryable
+
+
+def test_client_proxy_error_retried_once():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        raise httpx.ProxyError("407 Proxy Authentication Required", request=request)
+
+    with pytest.raises(NovelAIError) as info:
+        run_generate(handler)
+    assert len(calls) == 2 and "代理" in str(info.value)
+
+
+def test_client_unsupported_protocol_not_retried():
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        raise httpx.UnsupportedProtocol("Request URL has an unsupported protocol 'ftp://'.", request=request)
+
+    with pytest.raises(NovelAIError) as info:
+        run_generate(handler)
+    assert len(calls) == 1 and "协议" in str(info.value)
+
+
 def test_client_generate_no_retry_on_401():
     calls = []
 

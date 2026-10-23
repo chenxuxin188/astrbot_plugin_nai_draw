@@ -22,6 +22,9 @@ from .nai_client import (
     is_opus_free,
     is_v5_model,
     mask_token,
+    mask_url_credentials,
+    normalize_base_url,
+    normalize_proxy_url,
     parse_size,
     random_seed,
     tier_name,
@@ -581,8 +584,11 @@ class NaiDrawPlugin(Star):
         if expiry:
             status += f"，到期 {expiry}"
         total = anlas_total(data)
+        proxy = normalize_proxy_url(settings.proxy)
         lines = [
             "NovelAI 账户信息",
+            f"API 地址：{normalize_base_url(settings.base_url)}",
+            f"代理：{mask_url_credentials(proxy) if proxy else '未设置（使用 AstrBot 全局代理或直连）'}",
             f"Token：{mask_token(settings.token)}",
             f"订阅：{tier_name(tier)}（{status}）",
             "Anlas：{}（订阅 {} + 购买 {}）".format(

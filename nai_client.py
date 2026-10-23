@@ -59,6 +59,27 @@ class ImageRequest:
     seed: int = 0
 
 
+def normalize_base_url(url: str) -> str:
+    """规范化 API 地址：去掉空白和末尾的 /，未写协议时补 https://，留空时使用官方地址。"""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return DEFAULT_BASE_URL
+    return url if "://" in url else f"https://{url}"
+
+
+def normalize_proxy_url(url: str) -> str:
+    """规范化代理地址：未写协议时按 http 处理，留空返回空串（使用全局代理或直连）。"""
+    url = (url or "").strip()
+    if url and "://" not in url:
+        url = f"http://{url}"
+    return url
+
+
+def mask_url_credentials(url: str) -> str:
+    """隐藏地址中的用户名和密码，例如 http://user:pass@host → http://***@host。"""
+    return re.sub(r"//[^/@]+@", "//***@", url or "")
+
+
 def parse_size(text: str, default: tuple[int, int] = (832, 1216)) -> tuple[int, int]:
     """解析 "832x1216" 形式的尺寸，失败时返回 default。"""
     try:
@@ -245,24 +266,28 @@ class NovelAIClient:
         self._lock = asyncio.Lock()
 
     async def _http(self, base_url: str, proxy: str) -> httpx.AsyncClient:
-        key = ((base_url or DEFAULT_BASE_URL).strip().rstrip("/"), (proxy or "").strip() or None)
+        key = (normalize_base_url(base_url), normalize_proxy_url(proxy) or None)
         async with self._lock:
             if self._closed:
                 raise NovelAIError("插件已停用或正在重载，请求已取消")
             if self._client is None or self._key != key:
+                try:
+                    client = httpx.AsyncClient(
+                        base_url=key[0],
+                        proxy=key[1],
+                        headers={
+                            "User-Agent": USER_AGENT,
+                            "Origin": "https://novelai.net",
+                            "Referer": "https://novelai.net/",
+                        },
+                        transport=self._transport,
+                    )
+                except (ValueError, TypeError, ImportError, httpx.InvalidURL) as e:
+                    # 例如代理协议不受支持、地址格式错误，或 socks5 代理缺少 socksio
+                    raise NovelAIError(f"API 地址或代理地址无效：{e}") from e
                 if self._client is not None:
                     self._stale.append(self._client)
-                self._client = httpx.AsyncClient(
-                    base_url=key[0],
-                    proxy=key[1],
-                    headers={
-                        "User-Agent": USER_AGENT,
-                        "Origin": "https://novelai.net",
-                        "Referer": "https://novelai.net/",
-                    },
-                    transport=self._transport,
-                )
-                self._key = key
+                self._client, self._key = client, key
             return self._client
 
     async def close(self) -> None:
@@ -281,6 +306,11 @@ class NovelAIClient:
             resp = await client.request(
                 method, path, headers=headers, timeout=httpx.Timeout(timeout, connect=15), **kwargs
             )
+        except httpx.UnsupportedProtocol as e:
+            raise NovelAIError(f"API 地址协议不受支持，请使用 http:// 或 https://（{e}）") from e
+        except httpx.ProxyError as e:
+            # 代理拒绝或无法建立隧道，请求没有到达 NovelAI，可以安全重试
+            raise NovelAIError(f"代理连接失败，请检查代理地址（{e}）", retryable=True) from e
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
             # 请求还没有发出，可以安全重试
             raise NovelAIError(f"无法连接 NovelAI（{type(e).__name__}: {e}）", retryable=True) from e

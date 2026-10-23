@@ -19,6 +19,18 @@
         "secret": true,
         "hint": "在 NovelAI 网页 Account Settings → Get Persistent API Token 获取，以 pst- 开头。"
       },
+      "base_url": {
+        "description": "API 地址",
+        "type": "string",
+        "default": "https://image.novelai.net",
+        "hint": "NovelAI 绘图接口地址，生成图片（/ai/generate-image）和查询余额（/user/subscription）都使用它。默认官方地址；使用反向代理或中转服务时改成对应地址，未写协议时自动补 https://。"
+      },
+      "proxy_url": {
+        "description": "代理地址",
+        "type": "string",
+        "default": "",
+        "hint": "访问 API 地址时使用的代理，支持 http / https / socks5，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890；未写协议时按 http 处理。留空则使用 AstrBot 系统设置中的全局代理（若有）。国内服务器通常需要配置。"
+      },
       "model": {
         "description": "绘图模型",
         "type": "string",
@@ -127,18 +139,6 @@
         "type": "bool",
         "default": true,
         "hint": "开启后自动把尺寸缩小到总像素 ≤ 1024×1024、步数限制在 28 以内。Opus 会员使用 V4.5 及以下模型时不消耗 Anlas；V5 模型不受此开关保护，仍会消耗 Opus 用量条，用尽后扣 Anlas。"
-      },
-      "base_url": {
-        "description": "接口地址",
-        "type": "string",
-        "default": "https://image.novelai.net",
-        "hint": "一般无需修改。"
-      },
-      "proxy_url": {
-        "description": "代理地址",
-        "type": "string",
-        "default": "",
-        "hint": "可选，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890。国内服务器通常需要配置。"
       },
       "timeout": {
         "description": "生成超时（秒）",
