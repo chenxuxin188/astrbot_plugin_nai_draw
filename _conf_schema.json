@@ -158,17 +158,23 @@
         "_special": "select_provider",
         "hint": "把聊天中的绘图需求转换成 NovelAI 标签。留空则使用当前会话正在使用的模型。"
       },
+      "tag_system_prompt": {
+        "description": "转换 NovelAI 英文 prompt 的系统提示词",
+        "type": "text",
+        "default": "You are an expert prompt writer for NovelAI Diffusion, an anime-style image model that understands Danbooru tags.\nYour task: turn the user's drawing request (it may be written in Chinese or any other language) into the ENGLISH prompt that will be sent directly to NovelAI for image generation. NovelAI only understands English, so translate every detail of the request into English tags.\n\nRules for \"prompt\":\n- Lowercase, comma-separated Danbooru-style English tags; short English phrases are allowed only for things tags cannot express.\n- Order: subject count (1girl, 2girls, 1boy, no humans, ...); for known characters the exact Danbooru character tag (keep a parenthesised qualifier only when the Danbooru tag itself has one, e.g. furina (genshin impact); otherwise none, e.g. hatsune miku) followed by the series/copyright as a separate tag (e.g. hatsune miku, vocaloid); then appearance (hair, eyes, body), clothing, expression, pose/action, held objects, background/scene, lighting, composition/camera angle, art style.\n- 15-40 tags. Be concrete and visual; turn abstract ideas into visible elements. Fill in reasonable details the user did not specify.\n- Do NOT add quality or aesthetic tags (masterpiece, best quality, very aesthetic, absurdres, ...); they are appended automatically.\n- Do not add artist tags unless the user explicitly asks for an artist's style; then write each one as artist:<danbooru artist tag> (e.g. artist:wlop).\n\nRules for \"negative\": only extra things to avoid that are specific to this request, as English tags (may be an empty string). Do not repeat generic quality negatives.\n\nRules for \"orientation\": portrait for single characters / full body; landscape for scenery, wide scenes or several characters side by side; square for icons, avatars or close-up faces.",
+        "hint": "让 LLM 把聊天中的绘图需求转换成 NovelAI 使用的英文 prompt 的系统提示词，可自由修改。输出格式（JSON）、只能使用英文、未成年人安全规则会固定附加在后面，无需写在这里，也无法被改掉。留空则使用默认值。"
+      },
       "required_positive": {
         "description": "必定包含的正面提示词",
         "type": "text",
         "default": "location, very aesthetic, masterpiece, no text",
-        "hint": "始终追加在正面提示词末尾（质量词）。默认值为 V4.5 Full 官方质量词；更换模型时请按官方文档调整，例如 V5 为 very aesthetic, masterpiece, no text。"
+        "hint": "始终追加在正面提示词末尾（质量词）。请填写英文标签，用逗号或换行分隔，含中文等非英文字符的标签会被忽略。默认值为 V4.5 Full 官方质量词；更换模型时请按官方文档调整，例如 V5 为 very aesthetic, masterpiece, no text。"
       },
       "required_negative": {
         "description": "必定包含的负面提示词",
         "type": "text",
         "default": "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page",
-        "hint": "始终放在负面提示词最前面。"
+        "hint": "始终放在负面提示词最前面。请填写英文标签，用逗号或换行分隔，含中文等非英文字符的标签会被忽略。"
       },
       "sfw_only": {
         "description": "仅生成全年龄内容",
@@ -207,6 +213,24 @@
         "type": "int",
         "default": 40,
         "hint": "会要求 LLM 不超过该字数；为避免句子被截断，超过该值 2 倍时才会强制截断。取值范围 10-200。"
+      },
+      "start_prompt": {
+        "description": "开始画图台词的提示词",
+        "type": "text",
+        "default": "对方想让你画：{description}\n你现在已经开始动笔画这幅画了。用一句话明确告诉对方你正在画（要让对方一看就知道已经开始画了），并请对方稍等一会儿。",
+        "hint": "开始绘图时发给 LLM 的要求，人格设定会自动附加。可用占位符：{description} 绘图需求。留空则使用默认提示词。"
+      },
+      "success_prompt": {
+        "description": "画图成功评价的提示词",
+        "type": "text",
+        "default": "对方想让你画：{description}\n你已经画好并把图发给了对方，画面内容（英文标签）：{prompt}\n用一句话简短评价一下这幅作品。",
+        "hint": "图片发出后生成评价时发给 LLM 的要求，人格设定会自动附加。可用占位符：{description} 绘图需求，{prompt} 实际使用的英文标签。留空则使用默认提示词。"
+      },
+      "fail_prompt": {
+        "description": "画图失败台词的提示词",
+        "type": "text",
+        "default": "对方想让你画：{description}\n但是这次画画失败了（原因：{error}）。\n说一句失落、遗憾的话，不用复述错误细节。",
+        "hint": "绘图失败、已发出错误信息后生成台词时发给 LLM 的要求，人格设定会自动附加。可用占位符：{description} 绘图需求，{error} 失败原因。留空则使用默认提示词。"
       }
     }
   },

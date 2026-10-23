@@ -351,6 +351,74 @@ def test_parse_tag_output_list_and_bad_orientation():
     assert out["prompt"] == "a, b" and out["orientation"] == ""
 
 
+def test_contains_non_english():
+    assert prompting.contains_non_english("1girl, 猫耳")
+    assert prompting.contains_non_english("ねこ") and prompting.contains_non_english("고양이")
+    assert prompting.contains_non_english("ｶﾀｶﾅ")  # 半角片假名
+    assert prompting.contains_non_english("кошка") and prompting.contains_non_english("แมว")
+    assert prompting.contains_non_english("1girl。")  # 中文标点
+    assert not prompting.contains_non_english("1girl, cat ears, pokémon, 1.2::smile::, {{blush}}, ♥, :3")
+    assert not prompting.contains_non_english("ｃａｔ　ｅａｒｓ，１ｇｉｒｌ")  # 全角字母和标点会转成半角
+    assert not prompting.contains_non_english("")
+
+
+def test_drop_non_english_tags():
+    kept, removed = prompting.drop_non_english_tags("1girl, 白色长发, cat ears，smile、穿着JK制服")
+    assert kept == "1girl, cat ears, smile" and removed == ["白色长发", "穿着JK制服"]
+    long_text = ", ".join(f"tag{i}" for i in range(500))
+    assert prompting.drop_non_english_tags(long_text)[0] == long_text  # 不截断
+    assert prompting.drop_non_english_tags("") == ("", [])
+
+
+def test_drop_non_english_tags_config_cases():
+    # 每行一个标签的配置：只去掉中文那一行
+    kept, removed = prompting.drop_non_english_tags("nsfw\nlowres\n低质量\nbad hands")
+    assert kept == "nsfw, lowres, bad hands" and removed == ["低质量"]
+    # 不去重，跨逗号的权重分组保持原样
+    weights = "1.2::cat ears, smile::, 0.8::dog ears, smile::, very aesthetic"
+    assert prompting.drop_non_english_tags(weights)[0] == weights
+    # 去掉分组中的中文标签时保留未闭合的权重 / 括号符号
+    assert prompting.drop_non_english_tags("1.2::猫耳, smile::, blush")[0] == "1.2::, smile::, blush"
+    assert prompting.drop_non_english_tags("{{白发, smile}}")[0] == "{{, smile}}"
+    assert prompting.drop_non_english_tags("1.2::猫耳::, smile")[0] == "smile"
+    # 、。 视为分隔符，「」【】 等括号去掉
+    assert prompting.drop_non_english_tags("smile。blush、「cat ears」")[0] == "smile, blush, cat ears"
+
+
+def test_choose_tag_result():
+    first = {"prompt": "1girl, 白色长发, cat ears, smile", "negative": "blurry", "orientation": "portrait"}
+    better = prompting.choose_tag_result(first, {"prompt": "1girl, white hair, cat ears", "negative": "", "orientation": ""})
+    assert better == {"prompt": "1girl, white hair, cat ears", "negative": "blurry", "orientation": "portrait"}
+    # 改写结果更差（英文标签更少或全是中文）时沿用第一次的结果
+    assert prompting.choose_tag_result(first, {"prompt": "一个女孩, 猫耳", "negative": "", "orientation": ""}) is first
+    assert prompting.choose_tag_result(first, {"prompt": "", "negative": "", "orientation": ""}) is first
+    assert prompting.english_tag_count("1girl, 白发, smile") == 2 and prompting.english_tag_count("") == 0
+
+
+def test_tag_system_prompt_is_configurable():
+    custom = prompting.build_tag_system_prompt("自定义：只画风景。", sfw=False)
+    assert custom.startswith("自定义：只画风景。")
+    # 输出格式、英文要求和安全规则始终附加
+    assert prompting.TAG_OUTPUT_RULES in custom and "ENGLISH ONLY" in custom and "minors" in custom
+    default = prompting.build_tag_system_prompt("   ")
+    assert default.startswith(prompting.DEFAULT_TAG_PROMPT)
+    assert "english prompt that will be sent directly to novelai" in prompting.DEFAULT_TAG_PROMPT.lower()
+    schema = json.loads((Path(__file__).resolve().parent.parent / "_conf_schema.json").read_text(encoding="utf-8"))
+    assert schema["prompt"]["items"]["tag_system_prompt"]["default"] == prompting.DEFAULT_TAG_PROMPT
+
+
+def test_parse_tag_output_normalizes_fullwidth():
+    out = prompting.parse_tag_output('{"prompt": "１girl，ｃａｔ ears", "negative": "", "orientation": "portrait"}')
+    assert out["prompt"] == "1girl, cat ears"
+
+
+def test_tag_prompts_require_english():
+    assert "ENGLISH ONLY" in prompting.build_tag_system_prompt()
+    assert "minors" in prompting.build_tag_system_prompt(sfw=False)
+    retry = prompting.build_tag_retry_prompt("画一只猫", "square", '{"prompt": "猫"}')
+    assert "画一只猫" in retry and '{"prompt": "猫"}' in retry and "English" in retry
+
+
 def test_clean_tags_limit():
     tags = prompting.clean_tags(", ".join(f"tag{i}" for i in range(1000)), limit=50)
     assert len(tags) <= 50 and not tags.endswith(",")
@@ -382,8 +450,27 @@ def test_prompt_builders():
     assert "Requested orientation: square" in prompting.build_tag_user_prompt("猫", "square")
     assert "猫娘" in prompting.build_persona_system_prompt("你是猫娘", 30)
     for kind in ("start", "success", "fail"):
-        assert prompting.build_persona_user_prompt(kind, description="一只猫", prompt="cat", error="boom")
+        text = prompting.build_persona_user_prompt(kind, description="一只猫", prompt="cat", error="boom")
+        assert "一只猫" in text and "{" not in text
         assert prompting.FALLBACK_LINES[kind]
+    assert "正在画" in prompting.build_persona_user_prompt("start", description="一只猫")
+    assert "正在画" in prompting.FALLBACK_LINES["start"]
+
+
+def test_persona_prompt_templates():
+    custom = prompting.build_persona_user_prompt(
+        "success", "画了{description}，标签{prompt}，保留{未知}和{{花括号}}", description="猫", prompt="cat")
+    assert custom == "画了猫，标签cat，保留{未知}和{{花括号}}"
+    assert prompting.build_persona_user_prompt("fail", "  ", error="x") == \
+        prompting.build_persona_user_prompt("fail", error="x")  # 空模板使用默认
+    assert len(prompting.build_persona_user_prompt("fail", "{error}", error="e" * 1000)) == 200
+
+
+def test_schema_persona_prompt_defaults_match_code():
+    schema = json.loads((Path(__file__).resolve().parent.parent / "_conf_schema.json").read_text(encoding="utf-8"))
+    items = schema["persona"]["items"]
+    for kind, template in prompting.DEFAULT_PERSONA_PROMPTS.items():
+        assert items[f"{kind}_prompt"]["default"] == template
 
 
 # ---------------------------------------------------------------- audit

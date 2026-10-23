@@ -33,9 +33,13 @@ from .prompting import (
     FALLBACK_LINES,
     build_persona_system_prompt,
     build_persona_user_prompt,
+    build_tag_retry_prompt,
     build_tag_system_prompt,
     build_tag_user_prompt,
+    choose_tag_result,
     clean_line,
+    contains_non_english,
+    drop_non_english_tags,
     join_tags,
     normalize_orientation,
     parse_tag_output,
@@ -312,6 +316,8 @@ class NaiDrawPlugin(Star):
 
             tags = await tags_task
             req = self._build_request(settings, tags, orientation)
+            logger.info(f"{LOG_PREFIX} 发送给 NovelAI 的 prompt：{req.prompt}")
+            logger.info(f"{LOG_PREFIX} 发送给 NovelAI 的负面 prompt：{req.negative}")
             record.update(
                 prompt=req.prompt,
                 negative=req.negative,
@@ -365,8 +371,11 @@ class NaiDrawPlugin(Star):
         steps = min(settings.steps, OPUS_FREE_MAX_STEPS) if settings.free_guard else settings.steps
         if settings.free_guard and is_v5_model(settings.model):
             logger.warning(f"{LOG_PREFIX} {settings.model} 是 V5 模型，不受免费参数保护：会消耗 Opus 用量条，用尽后扣 Anlas")
-        positive = _as_str(pc.get("required_positive"), DEFAULT_POSITIVE)
-        negative = _as_str(pc.get("required_negative"), DEFAULT_NEGATIVE)
+        # LLM 生成的标签已在 _make_tags 中过滤，这里只过滤配置里填写的必定包含的提示词
+        positive, dropped = drop_non_english_tags(_as_str(pc.get("required_positive"), DEFAULT_POSITIVE))
+        negative, dropped_negative = drop_non_english_tags(_as_str(pc.get("required_negative"), DEFAULT_NEGATIVE))
+        if dropped or dropped_negative:
+            logger.warning(f"{LOG_PREFIX} 配置的提示词中含非英文标签，已忽略：{dropped + dropped_negative}")
         return ImageRequest(
             model=settings.model,
             # 质量词按官方做法追加在末尾，必须的负面词放在最前
@@ -492,18 +501,39 @@ class NaiDrawPlugin(Star):
     async def _make_tags(self, event: AstrMessageEvent, description: str, orientation: str) -> dict:
         pc = self._section("prompt")
         system_prompt = build_tag_system_prompt(
-            sfw=_as_bool(pc.get("sfw_only"), True), extra=_as_str(pc.get("extra_instruction"))
+            _as_str(pc.get("tag_system_prompt")),
+            sfw=_as_bool(pc.get("sfw_only"), True),
+            extra=_as_str(pc.get("extra_instruction")),
         )
+        provider_id = _as_str(pc.get("provider_id"))
+        orientation = normalize_orientation(orientation)
         raw = await self._llm(
-            event,
-            _as_str(pc.get("provider_id")),
-            system_prompt,
-            build_tag_user_prompt(description, normalize_orientation(orientation)),
-            PROMPT_LLM_TIMEOUT,
+            event, provider_id, system_prompt, build_tag_user_prompt(description, orientation), PROMPT_LLM_TIMEOUT
         )
         tags = parse_tag_output(raw)
+        # NovelAI 只理解英文：结果里混有中日韩文字时让 LLM 重写一次
+        if contains_non_english(tags["prompt"]) or contains_non_english(tags["negative"]):
+            logger.info(f"{LOG_PREFIX} 提示词含非英文内容，要求 LLM 改写为英文：{tags['prompt'][:200]}")
+            try:
+                raw = await self._llm(
+                    event,
+                    provider_id,
+                    system_prompt,
+                    build_tag_retry_prompt(description, orientation, raw),
+                    PROMPT_LLM_TIMEOUT,
+                )
+                chosen = choose_tag_result(tags, parse_tag_output(raw))
+                if chosen is tags:
+                    logger.warning(f"{LOG_PREFIX} 改写结果不如第一次，沿用第一次的结果并去掉非英文标签")
+                tags = chosen
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} 改写英文提示词失败，将去掉非英文标签：{_err_text(e)}")
+        tags["prompt"], dropped = drop_non_english_tags(tags["prompt"])
+        tags["negative"], dropped_negative = drop_non_english_tags(tags["negative"])
+        if dropped or dropped_negative:
+            logger.warning(f"{LOG_PREFIX} 已去掉无法使用的非英文标签：{dropped + dropped_negative}")
         if not tags["prompt"]:
-            raise RuntimeError("LLM 没有生成有效的绘图提示词")
+            raise RuntimeError("LLM 没有生成有效的英文绘图提示词")
         return tags
 
     async def _persona_line(self, event: AstrMessageEvent, persona: str, kind: str, **info) -> str:
@@ -515,7 +545,7 @@ class NaiDrawPlugin(Star):
                 event,
                 _as_str(pc.get("provider_id")),
                 build_persona_system_prompt(persona, max_len),
-                build_persona_user_prompt(kind, **info),
+                build_persona_user_prompt(kind, _as_str(pc.get(f"{kind}_prompt")), **info),
                 PERSONA_LLM_TIMEOUT,
             )
             text = clean_line(text, max_len)

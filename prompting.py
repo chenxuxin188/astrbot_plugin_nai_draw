@@ -2,8 +2,20 @@
 
 import json
 import re
+import unicodedata
 
 ORIENTATIONS = ("portrait", "landscape", "square")
+
+# 中日韩文字、假名、谚文、注音及全角符号：NovelAI 只理解英文标签，这些字符不能出现在最终 prompt 中
+_NON_ENGLISH_RE = re.compile(
+    "[⺀-⿟　-〿぀-ヿ㄀-ㇿ㈀-鿿"
+    "ꥠ-꥿가-퟿豈-﫿︰-﹏＀-￯"
+    "\U00020000-\U0003ffff]"
+)
+_CJK_SEPARATOR_RE = re.compile("[、。]")  # 、。
+_CJK_BRACKET_RE = re.compile("[〈-】〔-〛]")  # 〈〉《》「」『』【】〔〕〖〗 等
+# NovelAI 的权重 / 强调语法：1.2::tag::、{tag}、[tag]
+_EMPHASIS_RE = re.compile(r"-?\d+(?:\.\d+)?::|::|[{}\[\]]")
 
 _ORIENTATION_ALIASES = {
     "竖": "portrait", "竖图": "portrait", "竖屏": "portrait", "纵向": "portrait",
@@ -16,29 +28,35 @@ _ORIENTATION_ALIASES = {
 MAX_PROMPT_CHARS = 2000
 
 FALLBACK_LINES = {
-    "start": "收到～这就开始画，稍等一下哦！",
+    "start": "收到～正在画了，稍等一下哦！",
     "success": "画好啦！看看喜不喜欢～",
     "fail": "呜……这次没能画出来，好失落。",
 }
 
 _THINK_RE = re.compile(r"<(think|thinking)>.*?</\1>", re.S | re.I)
 
-TAG_SYSTEM_PROMPT = """You are an expert prompt writer for NovelAI Diffusion, an anime-style image model that understands Danbooru tags.
-Convert the user's drawing request (it may be in any language) into a NovelAI prompt.
-
-Output ONLY one JSON object, without markdown code fences or any other text:
-{"prompt": "<tags>", "negative": "<tags or empty string>", "orientation": "portrait|landscape|square"}
+# 把绘图需求转换成 NovelAI 英文 prompt 的系统提示词，可在配置中修改（prompt.tag_system_prompt）
+DEFAULT_TAG_PROMPT = """You are an expert prompt writer for NovelAI Diffusion, an anime-style image model that understands Danbooru tags.
+Your task: turn the user's drawing request (it may be written in Chinese or any other language) into the ENGLISH prompt that will be sent directly to NovelAI for image generation. NovelAI only understands English, so translate every detail of the request into English tags.
 
 Rules for "prompt":
-- English, lowercase, comma-separated Danbooru-style tags; short natural-language phrases are allowed only for things tags cannot express.
+- Lowercase, comma-separated Danbooru-style English tags; short English phrases are allowed only for things tags cannot express.
 - Order: subject count (1girl, 2girls, 1boy, no humans, ...); for known characters the exact Danbooru character tag (keep a parenthesised qualifier only when the Danbooru tag itself has one, e.g. furina (genshin impact); otherwise none, e.g. hatsune miku) followed by the series/copyright as a separate tag (e.g. hatsune miku, vocaloid); then appearance (hair, eyes, body), clothing, expression, pose/action, held objects, background/scene, lighting, composition/camera angle, art style.
 - 15-40 tags. Be concrete and visual; turn abstract ideas into visible elements. Fill in reasonable details the user did not specify.
 - Do NOT add quality or aesthetic tags (masterpiece, best quality, very aesthetic, absurdres, ...); they are appended automatically.
 - Do not add artist tags unless the user explicitly asks for an artist's style; then write each one as artist:<danbooru artist tag> (e.g. artist:wlop).
 
-Rules for "negative": only extra things to avoid that are specific to this request (may be an empty string). Do not repeat generic quality negatives.
+Rules for "negative": only extra things to avoid that are specific to this request, as English tags (may be an empty string). Do not repeat generic quality negatives.
 
 Rules for "orientation": portrait for single characters / full body; landscape for scenery, wide scenes or several characters side by side; square for icons, avatars or close-up faces."""
+
+# 固定附加在系统提示词后、不可配置的部分：解析依赖输出格式，英文要求与安全规则不能被改掉
+TAG_OUTPUT_RULES = """Output format (required):
+Output ONLY one JSON object, without markdown code fences or any other text:
+{"prompt": "<English tags>", "negative": "<English tags or empty string>", "orientation": "portrait|landscape|square"}
+"prompt" and "negative" are the English prompt and English negative prompt sent to NovelAI. ENGLISH ONLY: they must not contain any Chinese, Japanese, Korean or other non-English text.
+
+Safety (always applies): never sexualize characters who are or look like minors (e.g. petite, child-like or loli characters). Depict them only in clearly non-sexual, non-suggestive ways, whatever the request says."""
 
 TAG_SFW_RULE = (
     "Keep the image safe for work: no nudity or sexual content. "
@@ -71,11 +89,82 @@ def join_tags(*parts: str) -> str:
     return ", ".join(out)
 
 
-def clean_tags(text: object, limit: int = MAX_PROMPT_CHARS) -> str:
-    """规范化 tag 串：统一逗号、去重、去空白，并在 tag 边界处截断到 limit 字符。"""
+def _is_non_latin_letter(ch: str) -> bool:
+    return unicodedata.category(ch).startswith("L") and not unicodedata.name(ch, "").startswith("LATIN")
+
+
+def contains_non_english(text: object) -> bool:
+    """是否含有 NovelAI 无法理解的字符：中日韩文字与符号，或其它非拉丁字母（如西里尔字母）。
+
+    全角字母、数字和标点会先转成半角；带重音的拉丁字母（如 pokémon）和 ♥ 等符号视为可用。
+    """
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    if _NON_ENGLISH_RE.search(text):
+        return True
+    return any(_is_non_latin_letter(ch) for ch in text if ord(ch) > 127)
+
+
+def _normalize_tag_text(text: object) -> str:
+    """全角转半角；换行和 、。 视为分隔符；去掉 「」【】《》 等中文括号。"""
     if isinstance(text, (list, tuple)):
         text = ", ".join(str(t) for t in text)
-    text = str(text or "").replace("，", ",").replace("\n", ",")
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    text = _CJK_SEPARATOR_RE.sub(",", text)
+    return _CJK_BRACKET_RE.sub(" ", text).replace("\n", ",")
+
+
+def _emphasis_balanced(marks: list[str]) -> bool:
+    joined = "".join(marks)
+    return (
+        joined.count("{") == joined.count("}")
+        and joined.count("[") == joined.count("]")
+        and sum(1 for m in marks if m.endswith("::")) % 2 == 0
+    )
+
+
+def drop_non_english_tags(text: object) -> tuple[str, list[str]]:
+    """去掉含非英文字符的 tag，返回 (保留的 tag 串, 被去掉的 tag)。
+
+    不去重、不截断，以免破坏配置中跨逗号的权重分组（如 1.2::a, b::）。被去掉的 tag 若带有
+    未闭合的权重或括号符号，会保留这些符号，避免强调范围扩散到其它 tag。
+    """
+    kept, removed = [], []
+    for tag in _normalize_tag_text(text).split(","):
+        tag = re.sub(r"\s+", " ", tag).strip()
+        if not tag:
+            continue
+        if not contains_non_english(tag):
+            kept.append(tag)
+            continue
+        removed.append(tag)
+        marks = _EMPHASIS_RE.findall(tag)
+        if marks and not _emphasis_balanced(marks):
+            kept.append("".join(marks))
+    return ", ".join(kept), removed
+
+
+def english_tag_count(text: object) -> int:
+    kept = drop_non_english_tags(text)[0]
+    return len(kept.split(", ")) if kept else 0
+
+
+def choose_tag_result(first: dict, retry: dict) -> dict:
+    """在第一次结果和要求改写后的结果中选一个：改写结果全是英文，或过滤后剩下的英文标签更多时才采用。"""
+    if retry.get("prompt") and (
+        not contains_non_english(retry["prompt"])
+        or english_tag_count(retry["prompt"]) > english_tag_count(first.get("prompt"))
+    ):
+        return {
+            "prompt": retry["prompt"],
+            "negative": retry.get("negative") or first.get("negative", ""),
+            "orientation": retry.get("orientation") or first.get("orientation", ""),
+        }
+    return first
+
+
+def clean_tags(text: object, limit: int = MAX_PROMPT_CHARS) -> str:
+    """规范化 tag 串：全角转半角、统一逗号、去重、去空白，并在 tag 边界处截断到 limit 字符。"""
+    text = _normalize_tag_text(text)
     seen: set[str] = set()
     out: list[str] = []
     length = 0
@@ -91,8 +180,10 @@ def clean_tags(text: object, limit: int = MAX_PROMPT_CHARS) -> str:
     return ", ".join(out)
 
 
-def build_tag_system_prompt(*, sfw: bool = True, extra: str = "") -> str:
-    prompt = TAG_SYSTEM_PROMPT
+def build_tag_system_prompt(base: str = "", *, sfw: bool = True, extra: str = "") -> str:
+    """系统提示词 = 可配置部分（为空时用默认值）+ 固定的输出格式、英文与安全要求 + 可选规则。"""
+    prompt = (base or "").strip() or DEFAULT_TAG_PROMPT
+    prompt += "\n\n" + TAG_OUTPUT_RULES
     if sfw:
         prompt += "\n\nSafety: " + TAG_SFW_RULE
     extra = (extra or "").strip()
@@ -106,6 +197,17 @@ def build_tag_user_prompt(description: str, orientation: str = "") -> str:
     if orientation:
         text += f"\n\nRequested orientation: {orientation}"
     return text
+
+
+def build_tag_retry_prompt(description: str, orientation: str, previous: str) -> str:
+    """上一次输出含非英文内容时，要求 LLM 全部改写成英文。"""
+    return (
+        build_tag_user_prompt(description, orientation)
+        + "\n\nYour previous answer contained Chinese, Japanese or Korean text, which NovelAI cannot understand:\n"
+        + previous.strip()[:1500]
+        + "\n\nAnswer again with the same JSON format. Translate everything into English tags; "
+        "do not output a single Chinese, Japanese or Korean character."
+    )
 
 
 def parse_tag_output(text: str) -> dict:
@@ -143,21 +245,38 @@ def build_persona_system_prompt(persona: str, max_len: int) -> str:
     )
 
 
-def build_persona_user_prompt(kind: str, *, description: str = "", prompt: str = "", error: str = "") -> str:
-    description = description.strip()[:300]
-    if kind == "start":
-        return f"对方想让你画：{description}\n你现在准备动笔，说一句开工前的话。"
-    if kind == "success":
-        return (
-            f"对方想让你画：{description}\n"
-            f"你已经画好并把图发给了对方，画面内容（英文标签）：{prompt[:400]}\n"
-            "用一句话简短评价一下这幅作品。"
-        )
-    return (
-        f"对方想让你画：{description}\n"
-        f"但是这次画画失败了（原因：{error[:200]}）。\n"
+# 生成人格台词的提示词模板，可在配置中修改。占位符：{description} 绘图需求，{prompt} 英文标签，{error} 失败原因
+DEFAULT_PERSONA_PROMPTS = {
+    "start": (
+        "对方想让你画：{description}\n"
+        "你现在已经开始动笔画这幅画了。用一句话明确告诉对方你正在画（要让对方一看就知道已经开始画了），"
+        "并请对方稍等一会儿。"
+    ),
+    "success": (
+        "对方想让你画：{description}\n"
+        "你已经画好并把图发给了对方，画面内容（英文标签）：{prompt}\n"
+        "用一句话简短评价一下这幅作品。"
+    ),
+    "fail": (
+        "对方想让你画：{description}\n"
+        "但是这次画画失败了（原因：{error}）。\n"
         "说一句失落、遗憾的话，不用复述错误细节。"
-    )
+    ),
+}
+
+_PLACEHOLDER_RE = re.compile(r"\{(description|prompt|error)\}")
+
+
+def build_persona_user_prompt(kind: str, template: str = "", *, description: str = "", prompt: str = "",
+                              error: str = "") -> str:
+    """用模板生成人格台词的提示词；模板为空时使用默认模板。只替换已知占位符，其余花括号原样保留。"""
+    values = {
+        "description": description.strip()[:300],
+        "prompt": prompt.strip()[:400],
+        "error": error.strip()[:200],
+    }
+    template = (template or "").strip() or DEFAULT_PERSONA_PROMPTS[kind]
+    return _PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], template)
 
 
 def clean_line(text: str, max_len: int) -> str:
